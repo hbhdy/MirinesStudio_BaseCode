@@ -32,8 +32,7 @@ namespace MirinesStudio
                 if (vibratorManager == null)
                 {
                     // VibratorManager °æ·Î
-                    using var ctx = activity;
-                    vibratorManager = ctx.Call<AndroidJavaObject>("getSystemService", "vibrator_manager");
+                    vibratorManager = activity.Call<AndroidJavaObject>("getSystemService", "vibrator_manager");
                 }
                 if (vibrator == null && vibratorManager != null)
                 {
@@ -44,8 +43,7 @@ namespace MirinesStudio
             {
                 if (vibrator == null)
                 {
-                    using var ctx = activity;
-                    vibrator = ctx.Call<AndroidJavaObject>("getSystemService", "vibrator");
+                    vibrator = activity.Call<AndroidJavaObject>("getSystemService", "vibrator");
                 }
             }
         }

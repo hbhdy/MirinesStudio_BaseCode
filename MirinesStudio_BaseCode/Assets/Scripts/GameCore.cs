@@ -36,9 +36,13 @@ namespace MirinesStudio
 
         //public static IAPManager IAP => Instance.Get<IAPManager>();
 
+        private static bool isCoreReady = false;
+        private static bool isSessionReady = false;
+        private static bool isAllReady = false;
 
-        [HideInInspector]
-        public static bool isCoreReady = false;
+        public static bool GetIsCoreReady() => isCoreReady;
+        public static bool GetIsSessionReady() => isSessionReady;
+        public static bool GetIsAllReady() => isAllReady;
 
         // ----- Init -----
 
@@ -84,9 +88,9 @@ namespace MirinesStudio
 
         }
 
-        public void OnApplicationQuit()
+        protected override void OnApplicationQuit()
         {
-
+            base.OnApplicationQuit();
         }
 
         // ----- Logic -----

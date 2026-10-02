@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -26,13 +25,31 @@ namespace MirinesStudio
         private static readonly StringBuilder sbSuccess = new StringBuilder();
         private static readonly StringBuilder sbFail = new StringBuilder();
         private readonly StringBuilder sbProgress = new StringBuilder();
-        private static readonly Regex regexComma = new Regex(",");
+
+        private static string EscapeCsv(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            value = value.Replace("\r\n", "\\n").Replace("\r", "\\n").Replace("\n", "\\n");
+            bool requiresQuotes = value.IndexOf(',') >= 0 || value.IndexOf('"') >= 0;
+            return requiresQuotes ? $"\"{value.Replace("\"", "\"\"")}\"" : value;
+        }
 
         [MenuItem("MirinesStudio/Convert All DataTable")]
         private static void ShowWindow()
         {
             var window = GetWindow<DataTableConvertWindow>();
             window.titleContent = new GUIContent("[ Convert DataTable ]");
+            window.Show();
+        }
+
+        [MenuItem("MirinesStudio/Validate All DataTable")]
+        private static void ValidateAllDataTable()
+        {
+            var window = GetWindow<DataTableConvertWindow>();
+            window.titleContent = new GUIContent("[ Convert DataTable ]");
+            window.ValidateProcess_DataTable_All();
             window.Show();
         }
 
@@ -53,6 +70,9 @@ namespace MirinesStudio
             EditorGUILayout.LabelField(CsvOutAssetPath);
 
             GUILayout.Space(8);
+            if (GUILayout.Button("Validate All (DataTable/Excel)", GUILayout.Height(36)))
+                ValidateProcess_DataTable_All();
+
             if (GUILayout.Button("Convert All (DataTable/Excel → Resources/CSV)", GUILayout.Height(36)))
                 ConvertProcess_DataTable_All();
 
@@ -122,6 +142,37 @@ namespace MirinesStudio
 
         // ----- Main -----
 
+        public void ValidateProcess_DataTable_All()
+        {
+            sbProgress.Clear();
+            string excelAbs = AbsPathFromAsset(ExcelAssetPath);
+            var di = new DirectoryInfo(excelAbs);
+
+            if (!di.Exists)
+            {
+                EditorUtility.DisplayDialog("Path Error", $"Excel folder not found:\n{excelAbs}\n\n(확인: {ExcelAssetPath})", "OK");
+                return;
+            }
+
+            int errorCount = 0;
+            int warningCount = 0;
+            FileInfo[] files = GetExcelFiles(di);
+
+            foreach (var file in files)
+            {
+                DataTableValidationResult validation = ValidateFile(file.FullName);
+                AppendValidationResult(validation);
+                errorCount += validation.ErrorCount;
+                warningCount += validation.WarningCount;
+            }
+
+            if (files.Length == 0)
+                sbProgress.AppendLine("Excel 파일이 없습니다.");
+
+            Repaint();
+            EditorUtility.DisplayDialog("데이터 테이블 검증", $"파일 {files.Length}개\n오류 {errorCount}개\n경고 {warningCount}개\n\n상세 내용은 변환 창과 Console을 확인해주세요.", "OK");
+        }
+
         public void ConvertProcess_DataTable_All()
         {
             sbSuccess.Clear();
@@ -140,22 +191,10 @@ namespace MirinesStudio
                 return;
             }
 
-            // 루트 폴더의 .xlsx
-            foreach (var file in di.GetFiles("*.xlsx"))
+            foreach (var file in GetExcelFiles(di))
             {
                 ConvertToFile(file.FullName, csvAbs);
                 Debug.Log("File.Name : " + file.Name);
-            }
-
-            // 하위 폴더의 .xlsx
-            foreach (var folder in di.GetDirectories())
-            {
-                Debug.Log("Folder.Name : " + folder.Name);
-                foreach (var file in folder.GetFiles("*.xlsx"))
-                {
-                    ConvertToFile(file.FullName, csvAbs);
-                    Debug.Log("File.Name : " + file.Name);
-                }
             }
 
             EditorUtility.DisplayDialog("Data Convert & Save Success.", sbSuccess.ToString(), "OK");
@@ -183,14 +222,8 @@ namespace MirinesStudio
                 return;
             }
 
-            foreach (var file in di.GetFiles("*.xlsx"))
+            foreach (var file in GetExcelFiles(di))
                 ConvertToFileTSV(file.FullName, tsvAbs);
-
-            foreach (var folder in di.GetDirectories())
-            {
-                foreach (var file in folder.GetFiles("*.xlsx"))
-                    ConvertToFileTSV(file.FullName, tsvAbs);
-            }
 
             EditorUtility.DisplayDialog("TSV Convert & Save Success.", sbSuccess.ToString(), "OK");
             if (sbFail.Length != 0)
@@ -210,7 +243,17 @@ namespace MirinesStudio
                 {
                     // 파일명만 추출
                     var fileNameNoExt = Path.GetFileNameWithoutExtension(absFilePath);
-                    ConvertProcess(reader.AsDataSet(), absSaveDir, fileNameNoExt, startRow);
+                    DataSet dataSet = reader.AsDataSet();
+                    DataTableValidationResult validation = DataTableValidator.Validate(dataSet, fileNameNoExt, startRow);
+                    AppendValidationResult(validation);
+
+                    if (validation.HasErrors)
+                    {
+                        sbFail.AppendLine($"{fileNameNoExt}: 검증 오류로 변환 중단");
+                        return;
+                    }
+
+                    ConvertProcess(dataSet, absSaveDir, fileNameNoExt, startRow);
                 }
             }
             catch (Exception ex)
@@ -231,16 +274,8 @@ namespace MirinesStudio
                 {
                     for (int y = 0; y < columns; y++)
                     {
-                        string str = result.Tables[0].Rows[x][y].ToString();
-
-                        // CSV 안전 처리
-                        if (str.Contains(','))
-                            str = regexComma.Replace(str, "u002c");
-
-                        if (str.StartsWith("{") && str.EndsWith("}"))
-                            str = $"\"{str}\"";
-
-                        sb.Append(str);
+                        string value = result.Tables[0].Rows[x][y].ToString();
+                        sb.Append(EscapeCsv(value));
 
                         if (y < columns - 1)
                             sb.Append(",");
@@ -262,7 +297,7 @@ namespace MirinesStudio
             }
             catch (Exception e)
             {
-                sbSuccess.Append(e.Message + "\n");
+                sbFail.Append(e.Message + "\n");
             }
         }
 
@@ -274,7 +309,17 @@ namespace MirinesStudio
                 using (var reader = ExcelReaderFactory.CreateReader(stream))
                 {
                     var fileNameNoExt = Path.GetFileNameWithoutExtension(absFilePath);
-                    ConvertProcessTSV(reader.AsDataSet(), absSaveDir, fileNameNoExt, startRow);
+                    DataSet dataSet = reader.AsDataSet();
+                    DataTableValidationResult validation = DataTableValidator.Validate(dataSet, fileNameNoExt, startRow);
+                    AppendValidationResult(validation);
+
+                    if (validation.HasErrors)
+                    {
+                        sbFail.AppendLine($"{fileNameNoExt}: 검증 오류로 변환 중단");
+                        return;
+                    }
+
+                    ConvertProcessTSV(dataSet, absSaveDir, fileNameNoExt, startRow);
                 }
             }
             catch (Exception ex)
@@ -322,8 +367,46 @@ namespace MirinesStudio
             }
             catch (Exception e)
             {
-                sbSuccess.Append(e.Message + "\n");
+                sbFail.Append(e.Message + "\n");
             }
+        }
+
+        private static FileInfo[] GetExcelFiles(DirectoryInfo directory)
+        {
+            FileInfo[] files = directory.GetFiles("*.xlsx", SearchOption.AllDirectories);
+            return Array.FindAll(files, file => !file.Name.StartsWith("~$", StringComparison.Ordinal));
+        }
+
+        private DataTableValidationResult ValidateFile(string absFilePath, int startRow = 2)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(absFilePath);
+            try
+            {
+                using var stream = File.Open(absFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = ExcelReaderFactory.CreateReader(stream);
+                return DataTableValidator.Validate(reader.AsDataSet(), fileName, startRow);
+            }
+            catch (Exception e)
+            {
+                var result = new DataTableValidationResult(fileName);
+                result.AddError($"파일을 읽지 못했습니다: {e.Message}");
+                return result;
+            }
+        }
+
+        private void AppendValidationResult(DataTableValidationResult result)
+        {
+            sbProgress.AppendLine($"[{result.FileName}] 오류 {result.ErrorCount}, 경고 {result.WarningCount}");
+            foreach (DataTableValidationIssue issue in result.Issues)
+            {
+                sbProgress.AppendLine($"  {issue}");
+                if (issue.Severity == DataTableValidationSeverity.Error)
+                    Debug.LogError($"[{result.FileName}] {issue}");
+                else
+                    Debug.LogWarning($"[{result.FileName}] {issue}");
+            }
+
+            sbProgress.AppendLine();
         }
     }
 }

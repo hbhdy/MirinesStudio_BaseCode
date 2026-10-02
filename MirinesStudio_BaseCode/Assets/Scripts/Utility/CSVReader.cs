@@ -7,7 +7,6 @@ public class CSVReader
 {
     private static readonly string SPLIT_RE = @",(?=(?:[^""]*""[^""]*"")*(?![^""]*""))";
     private static readonly string LINE_SPLIT_RE = @"\r\n|\n\r|\n|\r";
-    private static readonly char[] TRIM_CHARS = { '"' };
 
     public static List<Dictionary<string, object>> Read(TextAsset data)
     {
@@ -30,7 +29,10 @@ public class CSVReader
             var entry = new Dictionary<string, object>();
             for (var j = 0; j < header.Length && j < values.Length; j++)
             {
-                string value = values[j].TrimStart(TRIM_CHARS).TrimEnd(TRIM_CHARS);
+                string raw = values[j];
+                string value = raw.Length >= 2 && raw[0] == '"' && raw[^1] == '"'
+                    ? raw.Substring(1, raw.Length - 2).Replace("\"\"", "\"")
+                    : raw;
 
                 value = value
                    .Replace("\\r\\n", "\n")   // CSV에 \r\n 있을 때

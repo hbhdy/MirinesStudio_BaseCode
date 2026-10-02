@@ -164,7 +164,7 @@ namespace MirinesStudio
 
                 // 씬 내부 시스템 준비 대기 (예: GameCore.isCoreReady) (85%→95%)
                 SetTargetProgress(0.95f);
-                await UniTask.WaitUntil(() => GameCore.isCoreReady, PlayerLoopTiming.Update, ct);
+                await UniTask.WaitUntil(() => GameCore.GetIsCoreReady(), PlayerLoopTiming.Update, ct);
 
                 // 마무리 (95%→100%)
                 SetTargetProgress(1.0f);

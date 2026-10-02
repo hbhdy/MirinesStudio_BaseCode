@@ -14,6 +14,8 @@ namespace MirinesStudio
         private Regex myRegex = new Regex("u002c");
         private string commaText = "u002c";
 
+        public event System.Action OnLanguageChanged;
+
         // ----- Init -----
 
         public override async UniTask Task_Init()
@@ -49,6 +51,16 @@ namespace MirinesStudio
 
             //en, kr,
             CurLanguage = (Language)curLanguageIndex;
+        }
+
+        public void ChangeLanguage(Language language)
+        {
+            if (CurLanguage == language)
+                return;
+
+            CurLanguage = language;
+
+            OnLanguageChanged?.Invoke();
         }
 
         // ----- Get -----

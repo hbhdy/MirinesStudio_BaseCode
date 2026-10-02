@@ -67,7 +67,7 @@ namespace MirinesStudio
 
         // ----- Logic -----
 
-        protected void OnApplicationQuit()
+        protected virtual void OnApplicationQuit()
         {
             quitting = true;
         }
