@@ -57,6 +57,7 @@ namespace MirinesStudio
 
     public enum Canvas_SortOrder
     {
+        GLOBAL = 10000,
         [EnumName("화면")] SCREEN = 100,
         [EnumName("허드")] HUD = 1000,
         [EnumName("팝업")] POPUP = 3000,

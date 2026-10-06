@@ -12,16 +12,18 @@ namespace MirinesStudio
 
         [Range(0.1f, 5f)]
         [SerializeField]
-        float barSpeed = 1.2f; // 초당 진행량
-        private float currentProgress = 0.0f;
-        private float targetProgress = 0.0f;
+        private float barSpeed = 1.2f;
 
-        private bool _isLoading;
-        private CancellationTokenSource _ctsBar;
+        private float currentProgress;
+        private float targetProgress;
+        private bool isLoading;
+        private CancellationTokenSource loadingBarCancellation;
+        private SceneContext currentSceneContext;
 
-        // 외부에서 바인딩할 수 있도록 이벤트 노출 (선택)
+        public bool IsLoading => isLoading;
+
         public event Action<float> OnProgressChanged;
-        public event Action<bool> OnLoadingUISetActive; // true=표시/false=숨김
+        public event Action<bool> OnLoadingUISetActive;
 
         // ----- Init -----
 
@@ -35,45 +37,188 @@ namespace MirinesStudio
             base.Init();
         }
 
+        public override void Shutdown()
+        {
+            currentSceneContext?.Shutdown();
+            currentSceneContext = null;
+            StopTargetSceneSync();
+            base.Shutdown();
+        }
+
         // ----- Set -----
 
-        public void SetTargetProgress(float target)
-        {
-            targetProgress = Mathf.Clamp01(target);
-        }
+        public void SetTargetProgress(float target) => targetProgress = Mathf.Clamp01(target);
 
-        // 로딩바 동기화 루프 시작
         public void StartTargetSceneSync()
         {
-            StopTargetSceneSync(); // 중복 방지
-            _ctsBar = new CancellationTokenSource();
-            _ = SyncLoadingBarAsync(_ctsBar.Token); // fire-and-forget
+            StopTargetSceneSync();
+            loadingBarCancellation = new CancellationTokenSource();
+            SyncLoadingBarAsync(loadingBarCancellation.Token).Forget();
         }
 
-        // 로딩바 동기화 루프 중단
         public void StopTargetSceneSync()
         {
-            if (_ctsBar != null)
-            {
-                _ctsBar.Cancel();
-                _ctsBar.Dispose();
-                _ctsBar = null;
-            }
+            if (loadingBarCancellation == null)
+                return;
+
+            loadingBarCancellation.Cancel();
+            loadingBarCancellation.Dispose();
+            loadingBarCancellation = null;
+            currentProgress = 1f;
+            OnProgressChanged?.Invoke(currentProgress);
+            OnLoadingUISetActive?.Invoke(false);
         }
 
         // ----- Get -----
 
         // ----- Main -----
 
+        public UniTask LoadInitialSceneAsync(string targetScene, CancellationToken cancellationToken = default) => LoadSingleSceneAsync(targetScene, false, cancellationToken);
+
+        public UniTask SceneLoadingWithAsync(string targetScene, CancellationToken cancellationToken = default) => LoadSingleSceneAsync(targetScene, false, cancellationToken);
+
+        public UniTask SceneLoadingWithAsyncUI(string targetScene, CancellationToken cancellationToken = default) => LoadSingleSceneAsync(targetScene, true, cancellationToken);
+
+        public async UniTask SceneLoadingWithAdditive(string targetScene, bool setActive = true, CancellationToken cancellationToken = default)
+        {
+            if (isLoading)
+                throw new InvalidOperationException("A scene is already loading.");
+
+            isLoading = true;
+
+            try
+            {
+                GameCore.UI?.GlobalRoot?.SetTransitionActive(true);
+                AsyncOperation operation = SceneManager.LoadSceneAsync(targetScene, LoadSceneMode.Additive);
+                if (operation == null)
+                    throw new InvalidOperationException($"Failed to start loading scene: {targetScene}");
+
+                operation.allowSceneActivation = false;
+
+                while (operation.progress < 0.9f)
+                    await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
+
+                operation.allowSceneActivation = true;
+                await operation.ToUniTask(cancellationToken: cancellationToken);
+
+                if (setActive)
+                {
+                    Scene scene = SceneManager.GetSceneByName(targetScene);
+                    if (scene.IsValid())
+                        SceneManager.SetActiveScene(scene);
+                }
+            }
+            finally
+            {
+                isLoading = false;
+                GameCore.UI?.GlobalRoot?.SetTransitionActive(false);
+            }
+        }
+
+        public async UniTask SceneUnload(string sceneName, CancellationToken cancellationToken = default)
+        {
+            Scene scene = SceneManager.GetSceneByName(sceneName);
+            if (!scene.isLoaded)
+                return;
+
+            AsyncOperation operation = SceneManager.UnloadSceneAsync(sceneName);
+            await operation.ToUniTask(cancellationToken: cancellationToken);
+
+            await Resources.UnloadUnusedAssets();
+            GC.Collect();
+        }
+
         // ----- Logic -----
 
-        // SetTargetProgress(value)를 통한 로딩바 제어 (로딩상태에서 데이터 처리 및 연출을 위함)
-        private async UniTaskVoid SyncLoadingBarAsync(CancellationToken ct)
+        private async UniTask LoadSingleSceneAsync(string targetScene, bool useLoadingUI, CancellationToken cancellationToken)
+        {
+            if (isLoading)
+                throw new InvalidOperationException("A scene is already loading.");
+
+            if (string.IsNullOrWhiteSpace(targetScene))
+                throw new ArgumentException("Target scene name is empty.", nameof(targetScene));
+
+            isLoading = true;
+
+            try
+            {
+                GameCore.UI?.GlobalRoot?.SetTransitionActive(true);
+                GameCore.SetState(GameCoreState.LoadingScene);
+
+                if (useLoadingUI)
+                {
+                    StartTargetSceneSync();
+                    SetTargetProgress(0.05f);
+                }
+
+                currentSceneContext?.Shutdown();
+                currentSceneContext = null;
+
+                AsyncOperation operation = SceneManager.LoadSceneAsync(targetScene, LoadSceneMode.Single);
+                if (operation == null)
+                    throw new InvalidOperationException($"Failed to start loading scene: {targetScene}");
+
+                operation.allowSceneActivation = false;
+
+                while (operation.progress < 0.9f)
+                {
+                    if (useLoadingUI)
+                    {
+                        float progress = Mathf.Clamp01(operation.progress / 0.9f);
+                        SetTargetProgress(Mathf.Lerp(0.05f, 0.70f, progress));
+                    }
+
+                    await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
+                }
+
+                if (useLoadingUI)
+                    SetTargetProgress(0.85f);
+
+                operation.allowSceneActivation = true;
+                await operation.ToUniTask(cancellationToken: cancellationToken);
+
+                Scene loadedScene = SceneManager.GetSceneByName(targetScene);
+                SceneContext sceneContext = FindSceneContext(loadedScene);
+                if (sceneContext == null)
+                    throw new InvalidOperationException($"SceneContext is missing in scene: {targetScene}");
+
+                if (useLoadingUI)
+                    SetTargetProgress(0.95f);
+
+                await sceneContext.InitializeAsync(cancellationToken);
+                currentSceneContext = sceneContext;
+
+                GameCore.SetState(GameCoreState.Ready);
+
+                if (useLoadingUI)
+                    SetTargetProgress(1f);
+            }
+            catch (OperationCanceledException)
+            {
+                if (GameCore.State != GameCoreState.ShuttingDown)
+                    GameCore.SetState(GameCoreState.CoreReady);
+
+                throw;
+            }
+            catch (Exception e)
+            {
+                GameCore.SetFailure(e);
+                throw;
+            }
+            finally
+            {
+                isLoading = false;
+
+                if (useLoadingUI)
+                    StopTargetSceneSync();
+                GameCore.UI?.GlobalRoot?.SetTransitionActive(false);
+            }
+        }
+
+        private async UniTask SyncLoadingBarAsync(CancellationToken cancellationToken)
         {
             currentProgress = 0f;
             SetTargetProgress(0f);
-
-            // 필요 시 UI 표시 신호
             OnLoadingUISetActive?.Invoke(true);
             OnProgressChanged?.Invoke(currentProgress);
 
@@ -81,142 +226,30 @@ namespace MirinesStudio
             {
                 while (currentProgress < 0.999f)
                 {
-                    currentProgress = Mathf.MoveTowards(
-                        currentProgress,
-                        targetProgress,
-                        barSpeed * Time.unscaledDeltaTime
-                    );
-
+                    currentProgress = Mathf.MoveTowards(currentProgress, targetProgress, barSpeed * Time.unscaledDeltaTime);
                     OnProgressChanged?.Invoke(currentProgress);
-
-                    await UniTask.Delay(TimeSpan.FromMilliseconds(10),
-                        ignoreTimeScale: true, cancellationToken: ct);
+                    await UniTask.Delay(TimeSpan.FromMilliseconds(10), ignoreTimeScale: true, cancellationToken: cancellationToken);
                 }
             }
             catch (OperationCanceledException)
             {
-                // 취소 처리
-            }
-            finally
-            {
-                // 종료 시 보장: 바를 1.0으로 맞추고 UI 끄기
-                currentProgress = 1f;
-                OnProgressChanged?.Invoke(currentProgress);
-                OnLoadingUISetActive?.Invoke(false);
             }
         }
 
-        // 단순 씬 전환
-        public async UniTask SceneLoadingWithAsync(string targetScene, CancellationToken ct = default)
+        private static SceneContext FindSceneContext(Scene scene)
         {
-            if (_isLoading) return;
-            _isLoading = true;
-            try
+            if (!scene.IsValid() || !scene.isLoaded)
+                return null;
+
+            GameObject[] roots = scene.GetRootGameObjects();
+            for (int i = 0; i < roots.Length; i++)
             {
-                var async = SceneManager.LoadSceneAsync(targetScene, LoadSceneMode.Single);
-                async.allowSceneActivation = false;
-
-                // 0%→90% (엔진 로딩)
-                while (async.progress < 0.9f)
-                    await UniTask.Yield(PlayerLoopTiming.Update, ct);
-
-                // 활성화
-                async.allowSceneActivation = true;
-
-                // 완료 대기
-                await async.ToUniTask(cancellationToken: ct);
+                SceneContext context = roots[i].GetComponentInChildren<SceneContext>(true);
+                if (context != null)
+                    return context;
             }
-            finally
-            {
-                _isLoading = false;
-            }
-        }
 
-        // 단순 씬 + 로딩 UI 전환
-        public async UniTask SceneLoadingWithAsyncUI(string targetScene, CancellationToken ct = default)
-        {
-            if (_isLoading) return;
-            _isLoading = true;
-            StartTargetSceneSync(); // UI on + 바 루프 시작
-            try
-            {
-                // 시작 구간 (0%→5%)
-                SetTargetProgress(0.05f);
-
-                var async = SceneManager.LoadSceneAsync(targetScene, LoadSceneMode.Single);
-                async.allowSceneActivation = false;
-
-                // 파일/씬 로딩 (5%→70%)
-                while (async.progress < 0.9f)
-                {
-                    float p = Mathf.Clamp01(async.progress / 0.9f); // 0..1
-                    SetTargetProgress(Mathf.Lerp(0.05f, 0.70f, p));
-                    await UniTask.Yield(PlayerLoopTiming.Update, ct);
-                }
-
-                // 활성화 직전 준비 (70%→85%)
-                SetTargetProgress(0.85f);
-                await UniTask.Yield(PlayerLoopTiming.Update, ct);
-
-                // 활성화
-                async.allowSceneActivation = true;
-                await async.ToUniTask(cancellationToken: ct);
-
-                // 씬 내부 시스템 준비 대기 (예: GameCore.isCoreReady) (85%→95%)
-                SetTargetProgress(0.95f);
-                await UniTask.WaitUntil(() => GameCore.GetIsCoreReady(), PlayerLoopTiming.Update, ct);
-
-                // 마무리 (95%→100%)
-                SetTargetProgress(1.0f);
-                // 로딩바 루프는 1.0에 도달하면 UI를 자동 끕니다.
-            }
-            finally
-            {
-                _isLoading = false;
-                StopTargetSceneSync(); // 안전 종료 (이미 1.0에서 꺼졌더라도 중복 안전)
-            }
-        }
-
-        // 단순 씬 추가
-        public async UniTask SceneLoadingWithAdditive(string targetScene, bool setActive = true, CancellationToken ct = default)
-        {
-            if (_isLoading) return;
-            _isLoading = true;
-            try
-            {
-                var async = SceneManager.LoadSceneAsync(targetScene, LoadSceneMode.Additive);
-                async.allowSceneActivation = false;
-
-                while (async.progress < 0.9f)
-                    await UniTask.Yield(PlayerLoopTiming.Update, ct);
-
-                async.allowSceneActivation = true;
-                await async.ToUniTask(cancellationToken: ct);
-
-                if (setActive)
-                {
-                    var scn = SceneManager.GetSceneByName(targetScene);
-                    if (scn.IsValid()) SceneManager.SetActiveScene(scn);
-                }
-            }
-            finally
-            {
-                _isLoading = false;
-            }
-        }
-
-        // 씬 해제
-        public async UniTask SceneUnload(string sceneName, CancellationToken ct = default)
-        {
-            var scn = SceneManager.GetSceneByName(sceneName);
-            if (!scn.isLoaded) return;
-
-            var async = SceneManager.UnloadSceneAsync(sceneName);
-            await async.ToUniTask(cancellationToken: ct);
-
-            // 메모리 정리 (모바일 권장)
-            await Resources.UnloadUnusedAssets();
-            GC.Collect();
+            return null;
         }
     }
 }

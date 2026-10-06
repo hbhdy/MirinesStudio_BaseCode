@@ -17,19 +17,7 @@ namespace MirinesStudio
                     return null;
 
                 if (instance == null)
-                {
-                    GameObject obj = GameObject.Find(typeof(T).Name);
-                    if (obj == null)
-                    {
-
-                        obj = new GameObject(typeof(T).Name);
-                        instance = obj.AddComponent<T>();
-                    }
-                    else
-                    {
-                        instance = obj.GetComponent<T>();
-                    }
-                }
+                    instance = FindFirstObjectByType<T>(FindObjectsInactive.Include);
 
                 return instance;
             }

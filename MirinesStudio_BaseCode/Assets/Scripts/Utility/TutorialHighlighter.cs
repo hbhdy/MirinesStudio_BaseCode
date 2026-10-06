@@ -1,6 +1,3 @@
-/// 해당 스크립트는 Screen Space - Camera에서 동작하게 해놓음
-/// 다른 세팅으로 수정할 경우 UtilFunction.GetPlaceUIAtWorld 부분 확인 필요
-
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -19,119 +16,100 @@ namespace MirinesStudio
         public RectTransform highlightFrame;
         public Image imgHighlight;
 
-        private RectTransform _target;      // 강조할 대상
-
-        // ----- Init -----
+        private RectTransform _target;
+        private bool isHighlighting;
+        private readonly Vector3[] worldCorners = new Vector3[4];
 
         // ----- Set -----
 
-        public void Highlight(RectTransform t)
-        {
-            _target = t;
-            overlay.gameObject.SetActive(true);
-            UpdateHighlight();
-
-            imgHighlight.sprite = null;
-        }
+        public void Highlight(RectTransform t) => Highlight(t, null);
 
         public void Highlight(RectTransform t, Sprite sprite)
         {
-            _target = t;
-            overlay.gameObject.SetActive(true);
-            UpdateHighlight();
+            if (t == null || !t.gameObject.activeInHierarchy)
+            {
+                Hide();
+                return;
+            }
 
-            if (imgHighlight != null && sprite == null)
+            _target = t;
+            isHighlighting = true;
+            overlay.gameObject.SetActive(true);
+            if (imgHighlight != null)
                 imgHighlight.sprite = sprite;
+            Canvas.ForceUpdateCanvases();
+            UpdateHighlight();
         }
 
         public void Hide()
         {
-            overlay.gameObject.SetActive(false);
+            isHighlighting = false;
             _target = null;
+            overlay.gameObject.SetActive(false);
         }
-
-        // ----- Get -----
 
         // ----- Main -----
 
-
-        //void LateUpdate()
-        //{
-        //    // 대상 UI가 움직일 수도 있으니 매 프레임 업데이트하고 싶으면 여기에
-        //    if (target != null)
-        //        UpdateHighlight();
-        //}
+        private void LateUpdate()
+        {
+            if (!isHighlighting)
+                return;
+            if (_target == null || !_target.gameObject.activeInHierarchy)
+            {
+                Hide();
+                return;
+            }
+            UpdateHighlight();
+        }
 
         // ----- Logic -----
 
-        void UpdateHighlight()
+        private void UpdateHighlight()
         {
-            // 1) 타겟의 오버레이 로컬 좌표 코너 구하기
-            Vector3[] worldCorners = new Vector3[4];
+            Camera sourceCamera = GetCanvasCamera(_target);
+            Camera destinationCamera = GetCanvasCamera(overlay);
             _target.GetWorldCorners(worldCorners);
+            Vector2 localMin = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
+            Vector2 localMax = new Vector2(float.NegativeInfinity, float.NegativeInfinity);
 
-            Vector2[] localCorners = new Vector2[4];
-
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < worldCorners.Length; i++)
             {
-                // Screen Space - Camera에서는 반드시 uiCamera 사용
-                Vector3 screenPos = RectTransformUtility.WorldToScreenPoint(GameCore.UI.GetMainCam(), worldCorners[i]);
-                localCorners[i] = UtilFunction.GetPlaceUIAtWorld(overlay, screenPos, GameCore.UI.GetMainCam());
+                Vector2 screenPos = RectTransformUtility.WorldToScreenPoint(sourceCamera, worldCorners[i]);
+                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(overlay, screenPos, destinationCamera, out Vector2 localPos))
+                    return;
+                localMin = Vector2.Min(localMin, localPos);
+                localMax = Vector2.Max(localMax, localPos);
             }
-
-            Vector2 localMin = localCorners[0]; // bottom-left
-            Vector2 localMax = localCorners[2]; // top-right
-
-            float xMin = localMin.x;
-            float xMax = localMax.x;
-            float yMin = localMin.y;
-            float yMax = localMax.y;
 
             Rect r = overlay.rect;
-            float halfW = r.width * 0.5f;
-            float halfH = r.height * 0.5f;
+            float xMin = Mathf.Clamp(localMin.x, r.xMin, r.xMax);
+            float xMax = Mathf.Clamp(localMax.x, r.xMin, r.xMax);
+            float yMin = Mathf.Clamp(localMin.y, r.yMin, r.yMax);
+            float yMax = Mathf.Clamp(localMax.y, r.yMin, r.yMax);
 
-            float leftX = -halfW;
-            float rightX = halfW;
-            float bottomY = -halfH;
-            float topY = halfH;
-
-            // 위쪽 딤 : [yMax ~ top]
-            SetRect(topDim,
-                new Vector2(0, (topY + yMax) * 0.5f),                 // 중심
-                new Vector2(r.width, Mathf.Max(0, topY - yMax)));     // 크기
-
-            // 아래 딤 : [bottom ~ yMin]
-            SetRect(bottomDim,
-                new Vector2(0, (bottomY + yMin) * 0.5f),
-                new Vector2(r.width, Mathf.Max(0, yMin - bottomY)));
-
-            // 왼쪽 딤 : [left ~ xMin], 세로는 [yMin ~ yMax]만
-            SetRect(leftDim,
-                new Vector2((leftX + xMin) * 0.5f, (yMin + yMax) * 0.5f),
-                new Vector2(Mathf.Max(0, xMin - leftX), Mathf.Max(0, yMax - yMin)));
-
-            // 오른쪽 딤 : [xMax ~ right], 세로는 [yMin ~ yMax]만
-            SetRect(rightDim,
-                new Vector2((rightX + xMax) * 0.5f, (yMin + yMax) * 0.5f),
-                new Vector2(Mathf.Max(0, rightX - xMax), Mathf.Max(0, yMax - yMin)));
-
-            // 3) 가운데 하이라이트 테두리
+            SetRect(topDim, new Vector2(r.center.x, (r.yMax + yMax) * 0.5f), new Vector2(r.width, r.yMax - yMax));
+            SetRect(bottomDim, new Vector2(r.center.x, (r.yMin + yMin) * 0.5f), new Vector2(r.width, yMin - r.yMin));
+            SetRect(leftDim, new Vector2((r.xMin + xMin) * 0.5f, (yMin + yMax) * 0.5f), new Vector2(xMin - r.xMin, yMax - yMin));
+            SetRect(rightDim, new Vector2((r.xMax + xMax) * 0.5f, (yMin + yMax) * 0.5f), new Vector2(r.xMax - xMax, yMax - yMin));
             if (highlightFrame != null)
-            {
-                SetRect(highlightFrame,
-                    new Vector2((xMin + xMax) * 0.5f, (yMin + yMax) * 0.5f),
-                    new Vector2(xMax - xMin, yMax - yMin));
-            }
+                SetRect(highlightFrame, (localMin + localMax) * 0.5f, localMax - localMin);
+        }
 
-            void SetRect(RectTransform rt, Vector2 center, Vector2 size)
-            {
-                rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-                rt.pivot = new Vector2(0.5f, 0.5f);
+        private static Camera GetCanvasCamera(RectTransform target)
+        {
+            Canvas canvas = target.GetComponentInParent<Canvas>();
+            if (canvas == null)
+                return null;
+            Canvas rootCanvas = canvas.rootCanvas;
+            return rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : rootCanvas.worldCamera;
+        }
 
-                rt.anchoredPosition = center;
-                rt.sizeDelta = size;
-            }
+        private void SetRect(RectTransform rt, Vector2 center, Vector2 size)
+        {
+            rt.anchorMin = rt.anchorMax = overlay.pivot;
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = center;
+            rt.sizeDelta = size;
         }
     }
 }

@@ -29,6 +29,10 @@ namespace MirinesStudio
         private RectTransform rectUIHud;
 
         private Camera mainCam;
+        private SceneLoadingManager sceneLoading;
+        private int sceneVersion;
+
+        public GlobalCanvasRoot GlobalRoot { get; private set; }
 
 #if ADDRESSABLES
         // Addressables 인스턴스 해제용
@@ -37,6 +41,7 @@ namespace MirinesStudio
 
         private readonly Dictionary<UIType, UIBase> dicUI = new Dictionary<UIType, UIBase>();
         private readonly List<UIBase> openUIList = new List<UIBase>();
+        private readonly List<UIPopupBase> popupStack = new List<UIPopupBase>();
 
         // ----- Init -----
 
@@ -47,10 +52,33 @@ namespace MirinesStudio
 
         public override void Init()
         {
-            SetMainCamera();
-            SetTrUIParent(CanvasRoot.instance.trScreenParent, CanvasRoot.instance.trPopupParent, CanvasRoot.instance.trHudParent);
+            ClearSceneReferences();
+            GlobalRoot = GameCore.GetInstance().GetComponentInChildren<GlobalCanvasRoot>(true);
+            if (GlobalRoot == null || GlobalRoot.globalCanvas == null || GlobalRoot.trPopupParent == null)
+                throw new InvalidOperationException("GlobalCanvasRoot references are missing in GameCore.");
+
+            GlobalRoot.Init();
+            sceneLoading = GameCore.SCENE;
+            if (sceneLoading != null)
+            {
+                sceneLoading.OnLoadingUISetActive += GlobalRoot.SetLoadingActive;
+                sceneLoading.OnProgressChanged += GlobalRoot.SetLoadingProgress;
+            }
 
             base.Init();
+        }
+
+        public override void Shutdown()
+        {
+            if (sceneLoading != null && GlobalRoot != null)
+            {
+                sceneLoading.OnLoadingUISetActive -= GlobalRoot.SetLoadingActive;
+                sceneLoading.OnProgressChanged -= GlobalRoot.SetLoadingProgress;
+                GlobalRoot.SetLoadingActive(false);
+                GlobalRoot.SetTransitionActive(false);
+            }
+            ResetUIList();
+            base.Shutdown();
         }
 
         // ----- Set -----
@@ -75,9 +103,70 @@ namespace MirinesStudio
 
         public void SetMainCamera() => mainCam = Camera.main;
 
+        public bool BindSceneReferences(Camera camera, CanvasRoot root)
+        {
+            ClearSceneReferences();
+
+            if (camera == null || root == null || root.trScreenParent == null || root.trPopupParent == null || root.trHudParent == null)
+                return false;
+
+            mainCam = camera;
+            SetTrUIParent(root.trScreenParent, root.trPopupParent, root.trHudParent);
+            return true;
+        }
+
+        public bool RefreshSceneReferences() => BindSceneReferences(Camera.main, CanvasRoot.instance);
+
+        public void ClearSceneReferences()
+        {
+            sceneVersion++;
+            mainCam = null;
+            trUIScreen = null;
+            trUIPopup = null;
+            trUIHud = null;
+            rectUIScreen = null;
+            rectUIPopup = null;
+            rectUIHud = null;
+            var sceneKeys = new List<UIType>();
+            foreach (var pair in dicUI)
+            {
+                if (pair.Value == null || pair.Value.sortOrder != Canvas_SortOrder.GLOBAL)
+                    sceneKeys.Add(pair.Key);
+            }
+            foreach (UIType key in sceneKeys)
+                ReleaseUI(key);
+            openUIList.RemoveAll(ui => ui == null || ui.sortOrder != Canvas_SortOrder.GLOBAL);
+            popupStack.RemoveAll(ui => ui == null || ui.sortOrder != Canvas_SortOrder.GLOBAL);
+        }
+
         public void ResetUIList()
         {
-            dicUI.Clear();
+            foreach (UIType key in new List<UIType>(dicUI.Keys))
+                ReleaseUI(key);
+            openUIList.Clear();
+            popupStack.Clear();
+        }
+
+        private void ReleaseUI(UIType key)
+        {
+            UIBase ui = dicUI[key];
+            if (ui != null)
+            {
+                ui.callOpenAfter = null;
+                ui.callCloseAfter = null;
+            }
+#if ADDRESSABLES
+            if (dicInstHandle.TryGetValue(key, out var handle))
+            {
+                if (handle.IsValid())
+                    Addressables.ReleaseInstance(handle);
+                dicInstHandle.Remove(key);
+            }
+            else
+#endif
+            if (ui != null)
+                Destroy(ui.gameObject);
+            dicUI.Remove(key);
         }
 
         // ----- Get -----
@@ -104,6 +193,8 @@ namespace MirinesStudio
         {
             switch (sort)
             {
+                case Canvas_SortOrder.GLOBAL:
+                    return GlobalRoot != null ? GlobalRoot.trPopupParent : null;
                 case Canvas_SortOrder.POPUP:
                     return trUIPopup;
                 case Canvas_SortOrder.SCREEN:
@@ -124,6 +215,8 @@ namespace MirinesStudio
         // 비동기 버전 
         public async UniTask OpenUIAsync(UIType uiType, Canvas_SortOrder sortOrder = Canvas_SortOrder.POPUP, Action openAfter = null, Action closeAfter = null, UIAssetSource source = UIAssetSource.Addressables)
         {
+            if (GetParent(sortOrder) == null)
+                return;
             var openUI = GetUI(uiType);
             if (openUI == null)
             {
@@ -141,9 +234,10 @@ namespace MirinesStudio
                 }
             }
 
+            openUI.transform.SetParent(GetParent(sortOrder), false);
+            openUI.sortOrder = sortOrder;
             WireOpenCloseCallbacks(openUI, openAfter, closeAfter);
-            if (!openUIList.Contains(openUI))
-                openUIList.Add(openUI);
+            RegisterOpenUI(openUI);
 
             openUI.OpenUI();
             RefreshPopupSortingOrder();
@@ -153,6 +247,8 @@ namespace MirinesStudio
 
         public T OpenUI<T>(UIType uiType, Canvas_SortOrder sortOrder = Canvas_SortOrder.POPUP, Action openAfter = null, Action closeAfter = null, UIAssetSource source = UIAssetSource.Addressables) where T : UIBase
         {
+            if (GetParent(sortOrder) == null)
+                return null;
             var openUI = GetUI(uiType);
             if (openUI == null)
             {
@@ -171,9 +267,10 @@ namespace MirinesStudio
                 }
             }
 
+            openUI.transform.SetParent(GetParent(sortOrder), false);
+            openUI.sortOrder = sortOrder;
             WireOpenCloseCallbacks(openUI, openAfter, closeAfter);
-            if (!openUIList.Contains(openUI))
-                openUIList.Add(openUI);
+            RegisterOpenUI(openUI);
 
             openUI.OpenUI();
             RefreshPopupSortingOrder();
@@ -182,6 +279,47 @@ namespace MirinesStudio
         }
 
         // ----- Logic -----
+
+        public bool TryHandleBack()
+        {
+            if (GlobalRoot != null && GlobalRoot.IsTransitioning)
+                return true;
+
+            popupStack.RemoveAll(popup => popup == null || !popup.gameObject.activeInHierarchy);
+            for (int i = popupStack.Count - 1; i >= 0; i--)
+            {
+                if (popupStack[i].sortOrder == Canvas_SortOrder.GLOBAL)
+                    return popupStack[i].HandleBack();
+            }
+
+            while (popupStack.Count > 0)
+            {
+                int lastIndex = popupStack.Count - 1;
+                UIPopupBase popup = popupStack[lastIndex];
+
+                if (popup == null || !popup.gameObject.activeInHierarchy)
+                {
+                    popupStack.RemoveAt(lastIndex);
+                    continue;
+                }
+
+                return popup.HandleBack();
+            }
+
+            return false;
+        }
+
+        private void RegisterOpenUI(UIBase openUI)
+        {
+            openUIList.Remove(openUI);
+            openUIList.Add(openUI);
+
+            if (openUI is not UIPopupBase popup)
+                return;
+
+            popupStack.Remove(popup);
+            popupStack.Add(popup);
+        }
 
         private void WireOpenCloseCallbacks(UIBase openUI, Action openAfter, Action closeAfter)
         {
@@ -193,6 +331,10 @@ namespace MirinesStudio
             openUI.callCloseAfter = () =>
             {
                 openUIList.Remove(openUI);
+
+                if (openUI is UIPopupBase popup)
+                    popupStack.Remove(popup);
+
                 closeAfter?.Invoke();
                 RefreshPopupSortingOrder();
 
@@ -210,7 +352,7 @@ namespace MirinesStudio
         // 비동기 InstantiateAsync → UIBase 캐싱
         private async UniTask<UIBase> LoadUIAsync_Addressables(UIType uiType, Canvas_SortOrder sortOrder = Canvas_SortOrder.POPUP)
         {
-            if (trUIScreen == null || trUIPopup == null)
+            if (GetParent(sortOrder) == null)
             {
                 MSLog.LogError("UI parent transforms are not set. OpenUI failed.");
                 return null;
@@ -221,7 +363,15 @@ namespace MirinesStudio
 
             AsyncOperationHandle<GameObject> instHandle = Addressables.InstantiateAsync(key, parentTr);
 
+            int version = sceneVersion;
             await instHandle.ToUniTask();
+
+            if (parentTr == null || (sortOrder != Canvas_SortOrder.GLOBAL && version != sceneVersion))
+            {
+                if (instHandle.IsValid())
+                    Addressables.ReleaseInstance(instHandle);
+                return null;
+            }
 
             if (instHandle.Status != AsyncOperationStatus.Succeeded || instHandle.Result == null)
             {
@@ -248,7 +398,7 @@ namespace MirinesStudio
         // 동기 WaitForCompletion 사용
         private UIBase LoadUISync_Addressables(UIType uiType, Canvas_SortOrder sortOrder = Canvas_SortOrder.POPUP)
         {
-            if (trUIScreen == null || trUIPopup == null)
+            if (GetParent(sortOrder) == null)
             {
                 MSLog.LogError("UI parent transforms are not set. OpenUI failed.");
                 return null;
@@ -285,7 +435,7 @@ namespace MirinesStudio
         // Resources 비동기
         private async UniTask<UIBase> LoadUIAsync_Resources(UIType uiType, Canvas_SortOrder sortOrder)
         {
-            if (trUIScreen == null || trUIPopup == null || trUIHud == null)
+            if (GetParent(sortOrder) == null)
             {
                 MSLog.LogError("UI parents not set. OpenUI failed.");
                 return null;
@@ -296,7 +446,11 @@ namespace MirinesStudio
 
             // 1) 비동기 로드
             ResourceRequest req = Resources.LoadAsync<GameObject>(path);
+            int version = sceneVersion;
             await req.ToUniTask(); // UniTask await (AsyncOperation 확장)
+
+            if (parentTr == null || (sortOrder != Canvas_SortOrder.GLOBAL && version != sceneVersion))
+                return null;
 
             var prefab = req.asset as GameObject;
             if (prefab == null)
@@ -323,7 +477,7 @@ namespace MirinesStudio
         // Resources 동기
         private UIBase LoadUISync_Resources(UIType uiType, Canvas_SortOrder sortOrder)
         {
-            if (trUIScreen == null || trUIPopup == null || trUIHud == null)
+            if (GetParent(sortOrder) == null)
             {
                 MSLog.LogError("UI parents not set. OpenUI failed.");
                 return null;
@@ -357,6 +511,7 @@ namespace MirinesStudio
             int count = openUIList.Count;
             int popupIndex = (int)Canvas_SortOrder.POPUP;
             int screenIndex = (int)Canvas_SortOrder.SCREEN;
+            int globalIndex = (int)Canvas_SortOrder.GLOBAL;
 
             for (int i = 0; i < count; i++)
             {
@@ -364,7 +519,19 @@ namespace MirinesStudio
                     continue;
 
                 Canvas baseCanvas = openUIList[i].GetCanvas();
-                if (baseCanvas != null && openUIList[i].sortOrder == Canvas_SortOrder.POPUP)
+                if (baseCanvas != null)
+                {
+                    baseCanvas.overrideSorting = true;
+                    Canvas parentCanvas = openUIList[i].transform.parent.GetComponentInParent<Canvas>();
+                    if (parentCanvas != null)
+                        baseCanvas.sortingLayerID = parentCanvas.sortingLayerID;
+                }
+                if (baseCanvas != null && openUIList[i].sortOrder == Canvas_SortOrder.GLOBAL)
+                {
+                    baseCanvas.sortingOrder = globalIndex;
+                    globalIndex += 10;
+                }
+                else if (baseCanvas != null && openUIList[i].sortOrder == Canvas_SortOrder.POPUP)
                 {
                     baseCanvas.sortingOrder = popupIndex;
                     popupIndex += 10;

@@ -24,6 +24,11 @@ namespace MirinesStudio
             MSLog.Log($"{name} Init Success");
         }
 
+		public virtual void Shutdown()
+		{
+
+		}
+
 		// ----- Set -----
 
 		// ----- Get -----

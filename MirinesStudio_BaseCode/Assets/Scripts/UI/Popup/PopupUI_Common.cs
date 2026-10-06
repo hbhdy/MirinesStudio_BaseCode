@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 namespace MirinesStudio
 {
-    public class PopupUI_Common : UIBase
+    public class PopupUI_Common : UIPopupBase
     {
         // ----- Param -----
 
@@ -26,13 +26,16 @@ namespace MirinesStudio
         {
             base.OnAwake();
 
-            btnDim.onClick.AddListener(CloseUI);
-            btnClose.onClick.AddListener(CloseUI);
+            if (btnDim != null)
+                btnDim.onClick.AddListener(CloseUI);
+            if (btnClose != null)
+                btnClose.onClick.AddListener(CloseUI);
         }
 
         public void InitAutoClose()
         {
-            btnDim.interactable = false;
+            if (btnDim != null)
+                btnDim.interactable = false;
             Invoke("CloseUI", 2f);
         }
 
@@ -57,6 +60,9 @@ namespace MirinesStudio
 
         public override void CloseUI()
         {
+            if (IsClosing || !gameObject.activeSelf)
+                return;
+
             base.CloseUI();
 
             callback?.Invoke();

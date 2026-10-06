@@ -1,6 +1,5 @@
 using TMPro;
 using UnityEngine;
-using System.Collections;
 
 
 namespace MirinesStudio
@@ -12,7 +11,6 @@ namespace MirinesStudio
 
         public string key;
         private TextMeshProUGUI txtMeshPro;
-        private Coroutine waitRoutine;
         private bool subscribed;
 
         // ----- Init -----
@@ -24,7 +22,8 @@ namespace MirinesStudio
 
         private void OnEnable()
         {
-            waitRoutine = StartCoroutine(WaitAndRefresh());
+            GameCore.OnStateChanged += OnCoreStateChanged;
+            TrySubscribeAndRefresh();
         }
 
         private void OnDisable()
@@ -34,26 +33,33 @@ namespace MirinesStudio
 
         private void Recylce()
         {
-            if (waitRoutine != null)
-            {
-                StopCoroutine(waitRoutine);
-                waitRoutine = null;
-            }
+            GameCore.OnStateChanged -= OnCoreStateChanged;
 
-            if (subscribed && GameCore.Instance != null && GameCore.LOCAL != null)
-            {
-                GameCore.LOCAL.OnLanguageChanged -= Refresh;
-                subscribed = false;
-            }
+            LocalizationManager localization = GameCore.LOCAL;
+            if (subscribed && localization != null)
+                localization.OnLanguageChanged -= Refresh;
+
+            subscribed = false;
         }
 
         // ----- Set -----
 
-        private IEnumerator WaitAndRefresh()
+        private void OnCoreStateChanged(GameCoreState state)
         {
-            yield return new WaitUntil(() => GameCore.GetIsAllReady());
+            if (state == GameCoreState.Ready)
+                TrySubscribeAndRefresh();
+        }
 
-            GameCore.LOCAL.OnLanguageChanged += Refresh;
+        private void TrySubscribeAndRefresh()
+        {
+            if (subscribed || !GameCore.GetIsAllReady())
+                return;
+
+            LocalizationManager localization = GameCore.LOCAL;
+            if (localization == null)
+                return;
+
+            localization.OnLanguageChanged += Refresh;
             subscribed = true;
 
             Refresh();

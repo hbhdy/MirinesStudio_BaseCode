@@ -47,6 +47,7 @@ namespace MirinesStudio
 
         public abstract UIType UIType { get; }
         public Canvas_SortOrder sortOrder;
+        public bool IsClosing { get; private set; }
 
         private Canvas baseCanvas;
 
@@ -75,6 +76,8 @@ namespace MirinesStudio
 
         public virtual void OpenUI()
         {
+            IsClosing = false;
+
             if (!gameObject.activeSelf)
                 gameObject.SetActive(true);
 
@@ -88,6 +91,11 @@ namespace MirinesStudio
 
         public virtual void CloseUI()
         {
+            if (IsClosing || !gameObject.activeSelf)
+                return;
+
+            IsClosing = true;
+
             if (objOpenAnim)
             {
                 OnAnimation("1", CallCloseAfter_Anim);

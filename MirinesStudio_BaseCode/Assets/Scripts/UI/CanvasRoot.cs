@@ -17,14 +17,17 @@ namespace MirinesStudio
         [Header("UI ADS")]
         public GameObject objAdsBannerFrame;
 
-        [Header("UI ETC")]
-        public TutorialHighlighter highlighter;
-
         // ----- Init -----
 
         private void Awake()
         {
             instance = this;
+        }
+
+        private void OnDestroy()
+        {
+            if (instance == this)
+                instance = null;
         }
 
         // ----- Set -----
