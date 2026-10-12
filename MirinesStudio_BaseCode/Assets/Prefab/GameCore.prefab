@@ -950,7 +950,7 @@ MonoBehaviour:
   maxAudioSources: 4
   bgmSource: {fileID: 7427026806435347100}
   bgmClips: []
-  sfxClips: []
+  sfxEntries: []
 --- !u!82 &7427026806435347100
 AudioSource:
   m_ObjectHideFlags: 0

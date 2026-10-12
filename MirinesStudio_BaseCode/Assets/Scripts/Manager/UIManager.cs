@@ -173,6 +173,45 @@ namespace MirinesStudio
 
         public Camera GetMainCam() => mainCam;
 
+#if UNITY_EDITOR && SHOW_LOG
+        internal void AppendDebugInfo(System.Text.StringBuilder text)
+        {
+            bool blocked = GlobalRoot != null && GlobalRoot.IsTransitioning;
+            UIPopupBase backTarget = null;
+            for (int i = popupStack.Count - 1; i >= 0; i--)
+            {
+                UIPopupBase popup = popupStack[i];
+                if (popup == null || !popup.gameObject.activeInHierarchy)
+                    continue;
+                if (backTarget == null)
+                    backTarget = popup;
+                if (popup.sortOrder == Canvas_SortOrder.GLOBAL)
+                {
+                    backTarget = popup;
+                    break;
+                }
+            }
+
+            text.AppendLine(blocked ? "BACK: blocked (scene transition)" : backTarget != null ? $"BACK: {backTarget.UIType}" : "BACK: none");
+            text.AppendLine("Open UI (oldest first)");
+            int count = 0;
+            foreach (UIBase ui in openUIList)
+            {
+                if (ui == null || !ui.gameObject.activeInHierarchy)
+                    continue;
+                text.Append(ui.sortOrder == Canvas_SortOrder.GLOBAL ? "[Global] " : "[Scene] ").Append(ui.UIType);
+                if (!blocked && ui == backTarget)
+                    text.Append("  < BACK");
+                if (ui.IsClosing)
+                    text.Append("  (closing)");
+                text.AppendLine();
+                count++;
+            }
+            if (count == 0)
+                text.AppendLine("(none)");
+        }
+#endif
+
         public UIBase GetUI(UIType type)
         {
             if (dicUI.ContainsKey(type))

@@ -71,6 +71,10 @@ namespace MirinesStudio
 
         private void Start()
         {
+#if UNITY_EDITOR && SHOW_LOG
+            if (GetComponent<DevelopmentDebugPanel>() == null)
+                gameObject.AddComponent<DevelopmentDebugPanel>();
+#endif
             InitializeAsync(this.GetCancellationTokenOnDestroy()).Forget();
         }
 
