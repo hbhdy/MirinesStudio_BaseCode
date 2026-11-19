@@ -44,13 +44,13 @@ namespace MirinesStudio
 
         public static SceneLoadingManager SCENE => Instance?.Get<SceneLoadingManager>();
 
-        //public static FirebaseManager FB => Instance?.Get<FirebaseManager>();
+        public static IGameVersionSource VersionSource => Instance?.GetVersionSource();
 
         //public static GPGSManager GPGS => Instance?.Get<GPGSManager>();
 
-        //public static AdMobManager ADMOB => Instance?.Get<AdMobManager>();
+        public static IAdService ADMOB => Instance?.GetAdService();
 
-        //public static IAPManager IAP => Instance?.Get<IAPManager>();
+        public static IIapService IAP => Instance?.GetIapService();
 
         public static GameCoreState State { get; private set; } = GameCoreState.None;
         public static Exception InitializationException { get; private set; }
@@ -67,6 +67,36 @@ namespace MirinesStudio
         {
             var type = typeof(T);
             return dicManagers.ContainsKey(type) ? dicManagers[type] as T : null;
+        }
+
+        private IGameVersionSource GetVersionSource()
+        {
+            foreach (BaseManager manager in dicManagers.Values)
+            {
+                if (manager != null && manager is IGameVersionSource source)
+                    return source;
+            }
+            return null;
+        }
+
+        private IAdService GetAdService()
+        {
+            foreach (BaseManager manager in dicManagers.Values)
+            {
+                if (manager != null && manager is IAdService service)
+                    return service;
+            }
+            return null;
+        }
+
+        private IIapService GetIapService()
+        {
+            foreach (BaseManager manager in dicManagers.Values)
+            {
+                if (manager != null && manager is IIapService service)
+                    return service;
+            }
+            return null;
         }
 
         private void Start()
