@@ -11,7 +11,7 @@
 ![Pipeline](https://img.shields.io/badge/Render_Pipeline-URP-4078C0)
 ![Status](https://img.shields.io/badge/Status-In_Development-2EA87E)
 
-초기화와 씬 전환 · UI 수명 관리 · 데이터 도구 · 사운드 · 개발 편의 기능
+초기화와 씬 전환 · UI 수명 관리 · 데이터 도구 · 사운드 · 선택 SDK 어댑터
 
 </div>
 
@@ -25,7 +25,7 @@
 
 - **실무 경험 기반** — 개발하면서 겪은 반복 작업과 불편함을 공통 코드로 정리합니다.
 - **작은 단위의 확장** — 기존 구조에서 해결할 수 있는 문제는 불필요한 추상화 없이 보완합니다.
-- **선택적인 SDK 연결** — 게임의 기본 흐름을 먼저 만들고, 외부 서비스는 필요한 시점에 연결합니다.
+- **선택적인 SDK 연결** — Firebase, AdMob, Unity IAP를 어댑터로 분리하고 게임에 필요한 서비스만 활성화합니다.
 - **개발 중 확인 가능한 상태** — 초기화 상태, 팝업 목록, 데이터 오류를 확인할 수 있는 도구를 제공합니다.
 
 ## 주요 기능
@@ -39,6 +39,7 @@
 | 데이터 | Excel → CSV/TSV 변환, 변환 전 검증, 독립 검증 메뉴 | [데이터 도구](MirinesStudio_BaseCode/Assets/Scripts/Utility/Excel/Editor) |
 | 로컬라이징 | 키 기반 문자열 조회, 언어 변경 이벤트에 따른 텍스트 갱신 | [LocalizationManager](MirinesStudio_BaseCode/Assets/Scripts/Manager/LocalizationManager.cs), [LocalizeText](MirinesStudio_BaseCode/Assets/Scripts/UI/LocalizeText.cs) |
 | 사운드 | BGM 페이드, SFX 재사용, 타입별 중복 재생 제한, 광고 후 BGM 복구 | [SoundManager](MirinesStudio_BaseCode/Assets/Scripts/Manager/SoundManager.cs) |
+| 외부 서비스 | Firebase Firestore, AdMob, Unity IAP 어댑터와 플랫폼별 활성화 | [선택 SDK 어댑터](#선택-sdk-어댑터) |
 | 오브젝트 풀 | 프리팹별 사전 생성·대여·반환, 반환 전 처리 인터페이스 | [ObjectPool](MirinesStudio_BaseCode/Assets/Scripts/Utility/ObjectPool.cs) |
 | 개발 도구 | 코어·씬·UI 상태, FPS, 배속 제어를 제공하는 IMGUI 패널 | [DevelopmentDebugPanel](MirinesStudio_BaseCode/Assets/Scripts/UI/DevelopmentDebugPanel.cs) |
 | 설정·유틸리티 | 가벼운 로컬 설정 저장, Safe Area, 진동, 버튼 피드백 | [Utility](MirinesStudio_BaseCode/Assets/Scripts/Utility) |
@@ -179,11 +180,33 @@ Assets/DataTable의 Excel
 
 패널이 열려 있을 때만 0.5초 간격으로 상태를 갱신합니다. 기존 팝업 스택에 등록하지 않으며, ESC는 게임의 팝업 동작을 확인하는 데 사용할 수 있습니다. 성능 표시는 에디터 실행 중의 간단한 관찰용 수치입니다.
 
-## 선택 SDK와 설정 저장
+## 선택 SDK 어댑터
 
-광고, 결제, Firebase, GPGS, Analytics, GDPR 관련 코드는 **대부분 파일 전체가 주석 처리된 선택 적용 코드**입니다. 기본 개발 단계에서는 SDK를 강제로 연결하지 않습니다.
+`GameCore`는 SDK에 독립적인 인터페이스를 제공하고, SDK 초기화와 API 호출은 `Assets/Scripts/Integrations` 아래의 어댑터가 담당합니다. 심볼을 끄면 SDK를 참조하는 코드가 컴파일에서 제외됩니다. 어댑터 컴포넌트는 프리팹에 남아 있어도 비활성 상태로 동작합니다.
 
-필요한 서비스만 SDK를 설치한 뒤 관련 코드를 활성화하고, 해당 SDK 버전에 맞는 API와 플랫폼 설정을 확인해 연결합니다. 이 저장소에 관련 파일이 있다는 것이 서비스 연결 완료를 의미하지는 않습니다.
+| 서비스 | 프로젝트 SDK 버전 | 어댑터 | 활성화 심볼 | 게임 코드 진입점 |
+|---|---|---|---|---|
+| Firebase Cloud Firestore | Firebase Unity SDK 14.1.0 | [FirestoreAdapter](MirinesStudio_BaseCode/Assets/Scripts/Integrations/Firebase/FirestoreAdapter.cs) | `MIRINES_FIREBASE` | `GameCore.VersionSource` · `IGameVersionSource` |
+| AdMob | Google Mobile Ads Unity Plugin 11.7.0 | [AdMobAdapter](MirinesStudio_BaseCode/Assets/Scripts/Integrations/AdMob/AdMobAdapter.cs) | `MIRINES_ADMOB` | `GameCore.ADMOB` · `IAdService` |
+| 인앱 결제 | Unity IAP 5.5.1 | [UnityIapAdapter](MirinesStudio_BaseCode/Assets/Scripts/Integrations/IAP/UnityIapAdapter.cs) | `MIRINES_IAP` | `GameCore.IAP` · `IIapService` |
+
+현재 저장소의 Android 설정에는 세 심볼이 등록되어 있고, `GameCore` 프리팹의 `managerList`에도 세 어댑터가 등록되어 있습니다. 새 게임에서 가져다 쓸 때는 아래 순서로 필요한 기능을 연결합니다.
+
+1. 사용하는 서비스의 SDK를 설치합니다.
+2. **Project Settings → Player → Other Settings → Scripting Define Symbols**에서 대상 플랫폼에 해당 심볼을 추가합니다.
+3. 해당 게임의 `GameCore` 프리팹에 어댑터를 추가하고 `managerList`에 등록합니다. 게임에서는 서비스 참조와 `IsReady`를 확인한 뒤 호출합니다.
+
+- **Firestore** — Android의 `google-services.json` 또는 iOS의 `GoogleService-Info.plist`를 `Assets`에 넣습니다. 에디터에서 사용할 때는 `Assets/StreamingAssets/google-services-desktop.json`이 생성됐는지 확인합니다. 버전 조회는 `VersionInfo/Version` 문서의 `Current` 필드를 읽습니다. 초기화가 실패하면 경고를 남기고 기본 부팅을 이어갑니다.
+- **AdMob** — Google Mobile Ads 설정에 대상 플랫폼의 앱 ID를 입력합니다. 개발 설정은 Google 테스트 광고 단위를 사용하며, `Live` 설정에는 실제 광고 단위 ID가 필요합니다. 배너·전면·보상형 광고를 지원하며, 모바일에서는 UMP 동의 상태를 확인한 뒤 광고를 요청합니다.
+- **Unity IAP** — Inspector에서 상품 ID와 유형을 등록합니다. 상품·가격 조회와 구매 내역 동기화를 지원하고, 실제 구매를 시작하려면 검증과 지급을 담당하는 [IIapOrderHandler](MirinesStudio_BaseCode/Assets/Scripts/Manager/IIapService.cs)를 `Order Handler`에 연결해야 합니다. 처리기가 거래 ID 기준으로 중복 없이 지급·저장을 완료하면 스토어에 확정을 요청하고, 확정 콜백에서 구매 성공을 반환합니다.
+
+`SHOW_LOG`가 켜져 있으면 초기화 로그를 확인할 수 있습니다. AdMob의 완료 로그는 SDK 준비를, IAP의 완료 로그는 첫 구매 내역 동기화를 뜻합니다.
+
+SDK 없이 기본 패키지를 가져갈 때는 해당 플랫폼의 `MIRINES_*` 심볼을 끄고 SDK 에셋과 패키지 의존성을 제외합니다. 어댑터 스크립트도 제외한다면 내보낼 프리팹과 `managerList`에서 해당 어댑터 참조를 함께 제거합니다.
+
+GPGS와 별도 Analytics 매니저는 주석 처리된 참고 코드로 남아 있습니다.
+
+## 설정 저장
 
 `GameConfig`는 BGM·효과음·진동 등의 가벼운 사용자 설정을 위한 저장 용도입니다. 중요한 게임 진행 데이터나 재화의 서버 저장 기능을 대신하지 않습니다.
 
@@ -196,7 +219,8 @@ Assets/
 └─ Scripts/
    ├─ GameCore.cs          공통 초기화와 매니저 접근
    ├─ SceneContext.cs      씬별 초기화와 참조 정리
-   ├─ Manager/             UI · 씬 · 사운드 · 데이터 등
+   ├─ Manager/             기본 매니저와 SDK 독립 인터페이스
+   ├─ Integrations/        Firebase · AdMob · Unity IAP 어댑터
    ├─ UI/                  화면 기반 클래스와 전역 UI
    ├─ MetaData/            데이터 모델
    └─ Utility/
